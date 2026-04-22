@@ -76,6 +76,7 @@ def run_attention_torch(
     use_fp8_kv_cache,
     is_context_phase,
     perf_filename,
+    window_size=0,
     device="cuda:0",
 ):
     torch.cuda.set_device(device)
@@ -107,6 +108,8 @@ def run_attention_torch(
         num_gpu_blocks=8192,
         max_num_seqs=batch_size,
         use_fp8_kv_cache=use_fp8_kv_cache,
+        sliding_window=window_size if window_size > 0 else None,
+        head_dim=head_dim,
     )
 
     # vLLM >=0.19.0 requires an active config context for backend selection
@@ -259,12 +262,12 @@ def run_attention_torch(
         from vllm.v1.attention.backends.utils import PerLayerParameters
 
         def mock_get_per_layer_parameters(vllm_config, layer_names, impl_cls):
-            # Return mock parameters for a single layer
+            window_left = window_size - 1 if window_size > 0 else -1
             return {
                 layer_name: PerLayerParameters(
-                    window_left=-1,  # No sliding window
-                    logits_soft_cap=0.0,  # No soft cap
-                    sm_scale=1.0 / (head_dim**0.5),  # Standard scale
+                    window_left=window_left,
+                    logits_soft_cap=0.0,
+                    sm_scale=1.0 / (head_dim**0.5),
                 )
                 for layer_name in layer_names
             }
@@ -362,6 +365,7 @@ def run_attention_torch(
                 "attn_dtype": dtype_str,
                 "kv_cache_dtype": kv_cache_dtype_str,
                 "step": step,
+                "window_size": window_size,
                 "latency": latency,
             }
         ],
@@ -409,12 +413,16 @@ def get_context_attention_test_cases(if_unit_test=False):
         n_list = [4]
         n_kv_list = [0]
 
+    head_dim_list = [128, 64]
+    window_size_list = [0, 128]
     kv_cache_dtype_list = [False]
     if get_sm_version() > 86:
         kv_cache_dtype_list.append(True)
 
     # DEBUG
-    # print(f"b_list: {b_list}, s_list: {s_list}, n_list: {n_list}, n_kv_list: {n_kv_list}")
+    # print(f"b_list: {b_list}, s_list: {s_list}, n_list: {n_list}, "
+    #       f"n_kv_list: {n_kv_list}, head_dim_list: {head_dim_list}, "
+    #       f"window_size_list: {window_size_list}")
     for n in sorted(n_list, reverse=True):
         for s in sorted(s_list, reverse=True):
             for b in sorted(b_list, reverse=True):
@@ -434,19 +442,22 @@ def get_context_attention_test_cases(if_unit_test=False):
                     if b * s * num_kv_heads * 128 * 2 >= 2147483647:
                         continue
 
-                    for is_fp8_kv_cache in kv_cache_dtype_list:
-                        test_cases.append(
-                            [
-                                b,
-                                s,
-                                n,
-                                num_kv_heads,
-                                128,
-                                is_fp8_kv_cache,
-                                True,
-                                "context_attention_perf.txt",
-                            ]
-                        )
+                    for head_dim in head_dim_list:
+                        for window_size in window_size_list:
+                            for is_fp8_kv_cache in kv_cache_dtype_list:
+                                test_cases.append(
+                                    [
+                                        b,
+                                        s,
+                                        n,
+                                        num_kv_heads,
+                                        head_dim,
+                                        is_fp8_kv_cache,
+                                        True,
+                                        "context_attention_perf.txt",
+                                        window_size,
+                                    ]
+                                )
 
     return test_cases
 
@@ -479,6 +490,8 @@ def get_generation_attention_test_cases():
     ]
     n_kv_list = [1, 2, 4, 8]
 
+    head_dim_list = [128, 64]
+    window_size_list = [0, 128]
     kv_cache_dtype_list = [False]
     if get_sm_version() > 86:
         kv_cache_dtype_list.append(True)
@@ -516,19 +529,22 @@ def get_generation_attention_test_cases():
                 if get_sm_version() >= 100 and n // n_kv > 16:
                     continue
                 for s in target_s_list:
-                    for is_fp8_kv_cache in kv_cache_dtype_list:
-                        test_cases.append(
-                            [
-                                b,
-                                s,
-                                n,
-                                n_kv,
-                                128,
-                                is_fp8_kv_cache,
-                                False,
-                                "generation_attention_perf.txt",
-                            ]
-                        )
+                    for head_dim in head_dim_list:
+                        for window_size in window_size_list:
+                            for is_fp8_kv_cache in kv_cache_dtype_list:
+                                test_cases.append(
+                                    [
+                                        b,
+                                        s,
+                                        n,
+                                        n_kv,
+                                        head_dim,
+                                        is_fp8_kv_cache,
+                                        False,
+                                        "generation_attention_perf.txt",
+                                        window_size,
+                                    ]
+                                )
     return test_cases
 
 
